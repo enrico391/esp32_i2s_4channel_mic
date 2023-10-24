@@ -24,6 +24,8 @@
 // If your target is limited in memory remove this macro to save 10K RAM
 #define EIDSP_QUANTIZE_FILTERBANK   0
 
+#define BUFFER_SIZE 8192
+
 /*
  ** NOTE: If you run into TFLite arena allocation issue.
  **
@@ -62,6 +64,8 @@ static signed short sampleBuffer[sample_buffer_size];
 static bool debug_nn = false; // Set this to true to see e.g. features generated from the raw signal
 static int print_results = -(EI_CLASSIFIER_SLICES_PER_MODEL_WINDOW);
 static bool record_status = true;
+
+ei_impulse_result_t result = {0};
 
 
 
@@ -162,6 +166,85 @@ static void capture_samples(void* arg) {
   vTaskDelete(NULL);
 }
 
+
+
+//function that record sound 
+void record_sound(){
+    
+        // Define input buffer length
+        #define bufferLen 64
+        int16_t sBuffer[bufferLen];
+        size_t bytesIn = 0;
+        float mean_right = 0;
+        float mean_left = 0;
+        bool flag = true;
+        int value_threshold = 100;
+        Serial.println("RECORD INIT ......");
+        //BUFFER RECORD
+        int16_t *data = (int16_t *)malloc((BUFFER_SIZE) * sizeof(int16_t));
+        size_t total_bytes_read = 0;
+
+
+        //until the sound is greater than a value or flag is true run the record 
+    
+        
+            while(flag)
+            {
+                Serial.println("RECORD START......");
+                
+                //read from i2s
+                record_status = false;
+                esp_err_t result = i2s_read((i2s_port_t)1, data + total_bytes_read, BUFFER_SIZE - total_bytes_read , &bytesIn, 100);
+                
+                
+                //update total bytes read
+                total_bytes_read += bytesIn;
+
+                if (result == ESP_OK )
+                {
+                    Serial.print(bytesIn);
+                    //check if command is finish
+                    int16_t samples_read = bytesIn / 8;
+                    
+                    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! bytesIn = 0 WHYYYYY
+
+                    if(samples_read > 0){
+                        for (int16_t i = 0; i < samples_read; ++i) {
+                            //seguence bytes | 0 LEFT | | 1 RIGHT | | 2 LEFT | | 3 RIGHT | | 4 LEFT | | 5 RIGHT | | 6 LEFT | | 7 RIGHT |
+                            if(i % 2 == 0){
+                                mean_left += (sBuffer[i]);
+                            }
+                            else{
+                                mean_right += (sBuffer[i]); //sBuffer contains 64 bit
+                            }
+                        }
+                        
+                        //if the sound is very little stop record
+                        if(mean_left < value_threshold || mean_right < value_threshold){
+                            flag = false;
+                            record_status = true;
+                        }
+
+                        Serial.print(mean_left);
+                        Serial.print(" hh ");
+                        Serial.println(mean_right);
+
+                        //reset the value for the next iteration
+                        mean_left = 0;
+                        mean_right = 0;
+                    }
+                }
+            }
+            Serial.print("************FINISH RECORD****************");
+        
+    
+}
+
+
+//###################################################à
+
+
+
 /**
  * @brief      Init inferencing struct and setup/start PDM
  *
@@ -198,6 +281,7 @@ static bool microphone_inference_start(uint32_t n_samples)
     record_status = true;
 
     xTaskCreate(capture_samples, "CaptureSamples", 1024 * 32, (void*)sample_buffer_size, 10, NULL);
+
 
     return true;
 }
@@ -255,46 +339,7 @@ static void microphone_inference_end(void)
 
 
 
-void record_sound(){
-    // Define input buffer length
-    #define bufferLen 64
-    int16_t sBuffer[bufferLen];
-    size_t bytesIn = 0;
-    float mean_right = 0;
-    float mean_left = 0;
-    bool flag = true;
 
-    //until the sound is greater than a value or flag is true run the record 
-    while(mean_left > 200 || flag)
-    {
-
-        esp_err_t result = i2s_read((i2s_port_t)1, &sBuffer, bufferLen, &bytesIn, 100);
-
-        if (result == ESP_OK )
-        {
-            // Read I2S data buffer
-            int16_t samples_read = bytesIn /8 ;///8; //8 
-
-
-            if (samples_read > 0 ) 
-            {
-                
-
-                for (int16_t i = 0; i < samples_read; ++i) {
-                    //seguence bytes | 0 LEFT | | 1 RIGHT | | 2 LEFT | | 3 RIGHT | | 4 LEFT | | 5 RIGHT | | 6 LEFT | | 7 RIGHT |
-                    if(i % 2 == 0){
-                        mean_left += (sBuffer[i]);
-                    }
-                    else{
-                        mean_right += (sBuffer[i]); //sBuffer contains 64 bit
-                    }
-                }
-            }
-        }
-        //understand how to store data of microphone
-        flag = false;
-    }
-}
 
 
 
@@ -344,7 +389,7 @@ void loop()
     signal_t signal;
     signal.total_length = EI_CLASSIFIER_SLICE_SIZE;
     signal.get_data = &microphone_audio_signal_get_data;
-    ei_impulse_result_t result = {0};
+    //ei_impulse_result_t result = {0};
 
     EI_IMPULSE_ERROR r = run_classifier_continuous(&signal, &result, debug_nn);
     if (r != EI_IMPULSE_OK) {
@@ -365,7 +410,7 @@ void loop()
         }
 
         //if classification about word in 3 index = SBEM is greater than 0.7 
-        if(result.classification[3].value > 0.7){
+        if(result.classification[2].value > 0.7){
             //record data until the sound is low than a value 
             record_sound();
         }
